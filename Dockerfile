@@ -1,59 +1,53 @@
-# Stage: monolith-builder
-# Purpose: Uses the Rust image to build monolith
-# Notes:
-#  - Fine to leave extra here, as only the resulting binary is copied out
-FROM docker.io/rust:1.86-bullseye AS monolith-builder
+# syntax=docker/dockerfile:1
+FROM node:18-alpine AS base
 
-RUN set -eux && cargo install --locked monolith
+# Install dependencies only when needed
+FROM base AS deps
+# Check https://github.com/nodejs/docker-node/tree/b4117f9333da4138b03a546ec926ef50a31506c3#nodealpine to understand why libc6-compat might be needed.
+RUN apk add --no-cache libc6-compat
+WORKDIR /usr/src/app
 
-# Stage: main-app
-# Purpose: Compiles the frontend and
-# Notes:
-#  - Nothing extra should be left here.  All commands should cleanup
-FROM node:22.14-bullseye-slim AS main-app
+COPY pnpm-lock.yaml* package.json* ./
+RUN npm install -g pnpm
 
-ARG DEBIAN_FRONTEND=noninteractive
+# Install dependencies
+RUN pnpm fetch
 
-RUN mkdir /data
 
-WORKDIR /data
-
-COPY ./apps/web/package.json ./apps/web/playwright.config.ts ./apps/web/
-
-COPY ./apps/worker/package.json ./apps/worker/
-
-COPY ./packages ./packages
-
-COPY ./yarn.lock ./package.json ./
-
-RUN --mount=type=cache,sharing=locked,target=/usr/local/share/.cache/yarn \
-    set -eux && \
-    yarn install --network-timeout 10000000 && \
-    # Install curl for healthcheck, and ca-certificates to prevent monolith from failing to retrieve resources due to invalid certificates
-    apt-get update && \
-    apt-get install -yqq --no-install-recommends curl ca-certificates && \
-    apt-get autoremove && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# Copy the compiled monolith binary from the builder stage
-COPY --from=monolith-builder /usr/local/cargo/bin/monolith /usr/local/bin/monolith
-
-RUN set -eux && \
-    apt-get clean && \
-    yarn cache clean
-
+FROM base AS builder
+WORKDIR /usr/src/app
+COPY --from=deps /usr/src/app/node_modules ./node_modules
 COPY . .
+# This is our first build stage so we can cache the results
+# Build the app
+# See https://nextjs.org/docs/pages/building-your-application/deploying/production-checklist
+RUN --mount=type=cache,id=nextcache,target=/usr/src/app/.next/cache \
+    pnpm next build
 
-RUN yarn prisma:generate && \
-    yarn web:build
+FROM base as runner
+WORKDIR /usr/src/app
+# Don't run production as root
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+# Copy the production build from the previous stage
+RUN --mount=type=cache,id=nextcache-final,target=/usr/src/app/.next/cache \
+    --mount=type=bind,source=public,target=/usr/src/app/public \
+    --mount=type=bind,source=.next/standalone,target=/usr/src/app/.next/standalone \
+    --mount=type=bind,source=.next/static,target=/usr/src/app/.next/static \
+    sh -c "cp -r /usr/src/app/public /usr/src/app/.next/"
+# Install prisma
+RUN --mount=type=cache,id=pnpm,target=/root/.npm pnpm install --prod --frozen-lockfile
+# Generate prisma client
+RUN pnpm prisma generate
+# Set the correct permissions for the "nextjs" user
+RUN chown -R nextjs:nodejs /usr/src/app/.next
+USER nextjs
 
-HEALTHCHECK --interval=30s \
-            --timeout=5s \
-            --start-period=10s \
-            --retries=3 \
-            CMD [ "/usr/bin/curl", "--silent", "--fail", "http://127.0.0.1:3000/" ]
+ENV PORT 3000
 
-EXPOSE 3000
+# Next.js collects anonymous telemetry data about usage.
+# Learn more here: https://nextjs.org/telemetry
+# Uncomment the following line in case you want to disable telemetry.
+ENV NEXT_TELEMETRY_DISABLED 1
 
-CMD ["sh", "-c", "yarn prisma:deploy && yarn concurrently:start"]
+CMD ["node", ".next/standalone/server.js"]
