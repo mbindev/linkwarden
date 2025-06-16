@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM node:18-alpine AS base
 
-# This ARG is populated by Railway with a cache key.
+# This ARG is populated by Railway with a cache key, fulfilling their specific format.
 # Source: https://docs.railway.com/guides/dockerfiles#cache-mounts
 ARG CACHE_KEY
 
@@ -24,9 +24,7 @@ ARG CACHE_KEY
 WORKDIR /usr/src/app
 COPY --from=deps /usr/src/app/node_modules ./node_modules
 COPY . .
-# This is our first build stage so we can cache the results
-# Build the app
-# See https://nextjs.org/docs/pages/building-your-application/deploying/production-checklist
+# Build the app using the required cache mount format
 RUN --mount=type=cache,id=${CACHE_KEY}-nextcache,target=/usr/src/app/.next/cache \
     pnpm next build
 
@@ -43,7 +41,7 @@ RUN --mount=type=cache,id=${CACHE_KEY}-nextcache-final,target=/usr/src/app/.next
     --mount=type=bind,source=.next/standalone,target=/usr/src/app/.next/standalone \
     --mount=type=bind,source=.next/static,target=/usr/src/app/.next/static \
     sh -c "cp -r /usr/src/app/public /usr/src/app/.next/"
-# Install prisma
+# Install prisma using the required cache mount format
 RUN --mount=type=cache,id=${CACHE_KEY}-pnpm,target=/root/.npm pnpm install --prod --frozen-lockfile
 # Generate prisma client
 RUN pnpm prisma generate
