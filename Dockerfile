@@ -2,6 +2,7 @@
 FROM node:18-alpine AS base
 
 # This ARG will be populated by Railway to prefix cache mounts
+# We declare it globally here
 ARG BUILDKIT_CACHE_MOUNT_ID
 
 # Install dependencies only when needed
@@ -18,6 +19,8 @@ RUN pnpm fetch
 
 
 FROM base AS builder
+# Re-declare the ARG in this build stage to ensure it's available
+ARG BUILDKIT_CACHE_MOUNT_ID
 WORKDIR /usr/src/app
 COPY --from=deps /usr/src/app/node_modules ./node_modules
 COPY . .
@@ -28,6 +31,8 @@ RUN --mount=type=cache,id=${BUILDKIT_CACHE_MOUNT_ID}-nextcache,target=/usr/src/a
     pnpm next build
 
 FROM base as runner
+# Re-declare the ARG in this build stage as well
+ARG BUILDKIT_CACHE_MOUNT_ID
 WORKDIR /usr/src/app
 # Don't run production as root
 RUN addgroup --system --gid 1001 nodejs
