@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 FROM node:18-alpine AS base
 
-# This ARG will be populated by Railway to prefix cache mounts
-# We declare it globally here
-ARG BUILDKIT_CACHE_MOUNT_ID
+# This ARG is populated by Railway with a cache key.
+# Source: https://docs.railway.com/guides/dockerfiles#cache-mounts
+ARG CACHE_KEY
 
 # Install dependencies only when needed
 FROM base AS deps
@@ -20,31 +20,31 @@ RUN pnpm fetch
 
 FROM base AS builder
 # Re-declare the ARG in this build stage to ensure it's available
-ARG BUILDKIT_CACHE_MOUNT_ID
+ARG CACHE_KEY
 WORKDIR /usr/src/app
 COPY --from=deps /usr/src/app/node_modules ./node_modules
 COPY . .
 # This is our first build stage so we can cache the results
 # Build the app
 # See https://nextjs.org/docs/pages/building-your-application/deploying/production-checklist
-RUN --mount=type=cache,id=${BUILDKIT_CACHE_MOUNT_ID}-nextcache,target=/usr/src/app/.next/cache \
+RUN --mount=type=cache,id=${CACHE_KEY}-nextcache,target=/usr/src/app/.next/cache \
     pnpm next build
 
 FROM base as runner
 # Re-declare the ARG in this build stage as well
-ARG BUILDKIT_CACHE_MOUNT_ID
+ARG CACHE_KEY
 WORKDIR /usr/src/app
 # Don't run production as root
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 # Copy the production build from the previous stage
-RUN --mount=type=cache,id=${BUILDKIT_CACHE_MOUNT_ID}-nextcache-final,target=/usr/src/app/.next/cache \
+RUN --mount=type=cache,id=${CACHE_KEY}-nextcache-final,target=/usr/src/app/.next/cache \
     --mount=type=bind,source=public,target=/usr/src/app/public \
     --mount=type=bind,source=.next/standalone,target=/usr/src/app/.next/standalone \
     --mount=type=bind,source=.next/static,target=/usr/src/app/.next/static \
     sh -c "cp -r /usr/src/app/public /usr/src/app/.next/"
 # Install prisma
-RUN --mount=type=cache,id=${BUILDKIT_CACHE_MOUNT_ID}-pnpm,target=/root/.npm pnpm install --prod --frozen-lockfile
+RUN --mount=type=cache,id=${CACHE_KEY}-pnpm,target=/root/.npm pnpm install --prod --frozen-lockfile
 # Generate prisma client
 RUN pnpm prisma generate
 # Set the correct permissions for the "nextjs" user
